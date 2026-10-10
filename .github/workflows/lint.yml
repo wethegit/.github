@@ -11,9 +11,7 @@ on:
 permissions:
   contents: read
 
-concurrency:
-  group: ${{ github.workflow }}-${{ github.repository }}-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: true
+# No concurrency/cancel-in-progress: GitHub doesn't support it for ruleset workflows.
 
 env:
   ACTIONLINT_VERSION: 1.7.12
@@ -21,6 +19,10 @@ env:
 
 jobs:
   lint:
+    # Required for the ruleset to run this on pull_request in repos other than
+    # wethegit/.github, where it's also an active workflow (GitHub docs,
+    # "Troubleshooting rules").
+    if: true
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
