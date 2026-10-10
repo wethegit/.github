@@ -157,7 +157,8 @@ jobs:
             "https://github.com/rhysd/actionlint/releases/download/v${ACTIONLINT_VERSION}/$archive"
           echo "$ACTIONLINT_SHA256  $RUNNER_TEMP/$archive" | sha256sum -c -
           tar -xzf "$RUNNER_TEMP/$archive" -C "$RUNNER_TEMP" actionlint
-          "$RUNNER_TEMP/actionlint" -color
+          # shellcheck is off so existing run: scripts across the org don't start failing.
+          "$RUNNER_TEMP/actionlint" -color -shellcheck=
 
       # Nothing to lint
 
