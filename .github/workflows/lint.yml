@@ -1,0 +1,175 @@
+# Org-wide lint check, required on every PR in every wethegit repo through an
+# organization ruleset (managed in Terraform). As a required workflow it runs in
+# the context of the PR's repository, so checkout and all paths below refer to
+# that repo, not to wethegit/.github.
+name: Org lint
+
+on:
+  pull_request:
+  merge_group:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.repository }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+env:
+  ACTIONLINT_VERSION: 1.7.12
+  ACTIONLINT_SHA256: 8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Detect what to lint
+        id: detect
+        shell: bash
+        run: |
+          set -euo pipefail
+          mode=skip pm= pnpm_version= node_version_file= node_version=
+
+          if [[ -f package.json ]]; then
+            # jq exits 1 for "no lint script" and >1 for invalid JSON, which should fail the check.
+            if jq -e '(.scripts.lint // "") | length > 0' package.json > /dev/null; then
+              mode=node
+            elif [[ $? -gt 1 ]]; then
+              echo "::error file=package.json::package.json is not valid JSON"
+              exit 1
+            fi
+          fi
+
+          if [[ $mode == skip ]] && compgen -G '.github/workflows/*.y*ml' > /dev/null; then
+            mode=actionlint
+          fi
+
+          if [[ $mode == node ]]; then
+            if [[ -f package-lock.json ]]; then
+              pm=npm
+            elif [[ -f pnpm-lock.yaml ]]; then
+              pm=pnpm
+              # pnpm/action-setup reads packageManager when present; otherwise pick a
+              # pnpm major that understands the lockfile format.
+              if ! jq -e '(.packageManager // "") | startswith("pnpm@")' package.json > /dev/null; then
+                case "$(sed -n "s/^lockfileVersion: *'\{0,1\}\([0-9]*\).*/\1/p" pnpm-lock.yaml)" in
+                  5) pnpm_version=7 ;;
+                  6) pnpm_version=8 ;;
+                  9) pnpm_version=10 ;;
+                  *) pnpm_version=latest ;;
+                esac
+              fi
+            elif [[ -f yarn.lock ]]; then
+              pm=yarn
+            else
+              pm=npm-no-lock
+            fi
+
+            if [[ -f .nvmrc ]]; then
+              node_version_file=.nvmrc
+            elif jq -e '(.engines.node // "") | length > 0' package.json > /dev/null; then
+              node_version_file=package.json
+            else
+              node_version=lts/*
+            fi
+          fi
+
+          {
+            echo "mode=$mode"
+            echo "pm=$pm"
+            echo "pnpm-version=$pnpm_version"
+            echo "node-version-file=$node_version_file"
+            echo "node-version=$node_version"
+          } >> "$GITHUB_OUTPUT"
+          echo "mode=$mode pm=$pm node=${node_version_file:-$node_version}"
+
+      # package.json "lint" script
+
+      - name: Set up pnpm
+        if: steps.detect.outputs.pm == 'pnpm'
+        uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+        with:
+          version: ${{ steps.detect.outputs.pnpm-version }}
+
+      # Yarn 2+ is provided through Corepack; it must be on PATH before setup-node
+      # queries yarn for its cache directory.
+      - name: Enable Corepack
+        if: steps.detect.outputs.pm == 'yarn' && hashFiles('.yarnrc.yml') != ''
+        shell: bash
+        run: corepack enable
+
+      - name: Set up Node
+        if: steps.detect.outputs.mode == 'node'
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: ${{ steps.detect.outputs.node-version }}
+          node-version-file: ${{ steps.detect.outputs.node-version-file }}
+          cache: ${{ steps.detect.outputs.pm != 'npm-no-lock' && steps.detect.outputs.pm || '' }}
+
+      - name: Install dependencies
+        if: steps.detect.outputs.mode == 'node'
+        shell: bash
+        env:
+          PM: ${{ steps.detect.outputs.pm }}
+        run: |
+          set -euo pipefail
+          case "$PM" in
+            npm) npm ci ;;
+            npm-no-lock) npm install --no-audit --no-fund ;;
+            pnpm) pnpm install --frozen-lockfile ;;
+            yarn)
+              if [[ "$(yarn --version)" == 1.* ]]; then
+                yarn install --frozen-lockfile
+              else
+                yarn install --immutable
+              fi
+              ;;
+          esac
+
+      - name: Run lint script
+        if: steps.detect.outputs.mode == 'node'
+        shell: bash
+        env:
+          PM: ${{ steps.detect.outputs.pm }}
+        run: |
+          set -euo pipefail
+          case "$PM" in
+            npm|npm-no-lock) npm run lint ;;
+            pnpm) pnpm run lint ;;
+            yarn) yarn run lint ;;
+          esac
+
+      # No lint script: lint workflow files
+
+      - name: Run actionlint
+        if: steps.detect.outputs.mode == 'actionlint'
+        shell: bash
+        run: |
+          set -euo pipefail
+          archive="actionlint_${ACTIONLINT_VERSION}_linux_amd64.tar.gz"
+          curl -fsSL -o "$RUNNER_TEMP/$archive" \
+            "https://github.com/rhysd/actionlint/releases/download/v${ACTIONLINT_VERSION}/$archive"
+          echo "$ACTIONLINT_SHA256  $RUNNER_TEMP/$archive" | sha256sum -c -
+          tar -xzf "$RUNNER_TEMP/$archive" -C "$RUNNER_TEMP" actionlint
+          "$RUNNER_TEMP/actionlint" -color
+
+      # Nothing to lint
+
+      - name: Skip
+        if: steps.detect.outputs.mode == 'skip'
+        shell: bash
+        run: |
+          echo "::notice title=Org lint::No lint script found, skipped"
+          {
+            echo "### Org lint"
+            echo
+            echo "No lint script found, skipped."
+            echo
+            echo 'To opt in, add a `"lint"` script to `package.json`.'
+          } >> "$GITHUB_STEP_SUMMARY"
