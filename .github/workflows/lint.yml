@@ -21,8 +21,8 @@ jobs:
   lint:
     # Required for the ruleset to run this on pull_request in repos other than
     # wethegit/.github, where it's also an active workflow (GitHub docs,
-    # "Troubleshooting rules").
-    if: true
+    # "Troubleshooting rules"). always() rather than true, which actionlint rejects.
+    if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
