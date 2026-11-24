@@ -12,6 +12,7 @@ It's been my pleasure, over the last few years, to put together one of the best 
 - [Dale Pidlisny](https://github.com/consolecmnd)
 - [Clinton Pravton](https://github.com/pravton)
 - [Kelly Horan](https://github.com/meteoratlas)
+- [Saugat Malla](https://github.com/orgs/wethegit/people/saugatmalla)
 
 ## Join the team
 
